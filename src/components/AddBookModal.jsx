@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
-import { Plus, BookOpen, X, Camera, ImageIcon } from 'lucide-react';
+import { Plus, BookOpen, X, Camera, Loader2 } from 'lucide-react';
+import Tesseract from 'tesseract.js';
 
 function compressImage(file, maxWidth = 600, quality = 0.7) {
     return new Promise((resolve) => {
@@ -23,6 +24,67 @@ function compressImage(file, maxWidth = 600, quality = 0.7) {
     });
 }
 
+/**
+ * Attempt to parse title and author from OCR text.
+ * Heuristic: the largest / most prominent text on a book cover is usually the title,
+ * and a smaller line is the author. We take the first 1-2 substantial lines as title
+ * and the next one as author.
+ */
+function parseBookInfo(text) {
+    // Split into lines, trim, and filter out very short/empty lines
+    const lines = text
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 1);
+
+    if (lines.length === 0) return { title: '', author: '' };
+
+    // Filter out common noise words/phrases from covers
+    const noise = /^(new york times|bestseller|best seller|#1|national|international|a novel|a memoir|a story|introduction by|foreword by|winner|award|edition|revised|updated|million copies)/i;
+    const cleaned = lines.filter((l) => !noise.test(l));
+
+    if (cleaned.length === 0) return { title: lines[0], author: '' };
+
+    // Simple heuristic: first substantial line = title, look for author
+    let title = '';
+    let author = '';
+
+    // Try to find an "author" line — typically has "by" prefix, or is ALL CAPS name, or just a name
+    const byPattern = /^by\s+(.+)/i;
+
+    for (let i = 0; i < cleaned.length; i++) {
+        const byMatch = cleaned[i].match(byPattern);
+        if (byMatch) {
+            author = byMatch[1];
+            // Everything before this "by" line is the title
+            title = cleaned.slice(0, i).join(' ') || title;
+            break;
+        }
+    }
+
+    if (!title) {
+        // No "by" found — first line(s) = title, last substantial line = author
+        if (cleaned.length === 1) {
+            title = cleaned[0];
+        } else {
+            // Title is usually larger text (first lines), author usually at bottom
+            title = cleaned[0];
+            // Grab the last line as author candidate (often the author name)
+            const lastLine = cleaned[cleaned.length - 1];
+            // Check if it looks like a person's name (2-4 words, mostly alpha)
+            const words = lastLine.split(/\s+/);
+            if (words.length >= 2 && words.length <= 5 && words.every((w) => /^[A-Za-z.''-]+$/.test(w))) {
+                author = lastLine;
+            }
+        }
+    }
+
+    return {
+        title: title.substring(0, 100), // cap length
+        author: author.substring(0, 60),
+    };
+}
+
 export default function AddBookModal({ onAdd, onClose }) {
     const [form, setForm] = useState({
         title: '',
@@ -30,6 +92,8 @@ export default function AddBookModal({ onAdd, onClose }) {
         totalPages: '',
     });
     const [coverImage, setCoverImage] = useState(null);
+    const [scanning, setScanning] = useState(false);
+    const [scanStatus, setScanStatus] = useState('');
     const fileInputRef = useRef(null);
 
     const handleSubmit = (e) => {
@@ -42,8 +106,40 @@ export default function AddBookModal({ onAdd, onClose }) {
     const handlePhoto = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
+
+        // Compress and set the image immediately
         const compressed = await compressImage(file);
         setCoverImage(compressed);
+
+        // Run OCR in background (only if title is still empty)
+        if (!form.title.trim()) {
+            setScanning(true);
+            setScanStatus('Reading cover text…');
+            try {
+                const result = await Tesseract.recognize(file, 'eng', {
+                    logger: (m) => {
+                        if (m.status === 'recognizing text') {
+                            const pct = Math.round((m.progress || 0) * 100);
+                            setScanStatus(`Reading… ${pct}%`);
+                        }
+                    },
+                });
+
+                const { title, author } = parseBookInfo(result.data.text);
+
+                // Only fill empty fields so we don't overwrite user edits
+                setForm((prev) => ({
+                    ...prev,
+                    title: prev.title || title,
+                    author: prev.author || author,
+                }));
+            } catch (err) {
+                console.warn('OCR failed:', err);
+            } finally {
+                setScanning(false);
+                setScanStatus('');
+            }
+        }
     };
 
     const coverColors = [
@@ -98,22 +194,32 @@ export default function AddBookModal({ onAdd, onClose }) {
                                     alt="Book cover"
                                     className="w-full h-48 object-cover rounded-xl border border-white/10"
                                 />
-                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity rounded-xl flex items-center justify-center gap-3">
-                                    <button
-                                        type="button"
-                                        onClick={() => fileInputRef.current?.click()}
-                                        className="px-3 py-2 bg-white/20 backdrop-blur-sm rounded-lg text-sm font-medium hover:bg-white/30 transition-colors cursor-pointer"
-                                    >
-                                        Retake
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setCoverImage(null)}
-                                        className="px-3 py-2 bg-danger/40 backdrop-blur-sm rounded-lg text-sm font-medium hover:bg-danger/60 transition-colors cursor-pointer"
-                                    >
-                                        Remove
-                                    </button>
-                                </div>
+                                {/* Scanning Overlay */}
+                                {scanning && (
+                                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center gap-2">
+                                        <Loader2 size={24} className="text-primary-light animate-spin" />
+                                        <span className="text-sm text-white/80 font-medium">{scanStatus}</span>
+                                    </div>
+                                )}
+                                {/* Hover Controls */}
+                                {!scanning && (
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity rounded-xl flex items-center justify-center gap-3">
+                                        <button
+                                            type="button"
+                                            onClick={() => fileInputRef.current?.click()}
+                                            className="px-3 py-2 bg-white/20 backdrop-blur-sm rounded-lg text-sm font-medium hover:bg-white/30 transition-colors cursor-pointer"
+                                        >
+                                            Retake
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setCoverImage(null)}
+                                            className="px-3 py-2 bg-danger/40 backdrop-blur-sm rounded-lg text-sm font-medium hover:bg-danger/60 transition-colors cursor-pointer"
+                                        >
+                                            Remove
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         ) : (
                             <button
@@ -125,7 +231,7 @@ export default function AddBookModal({ onAdd, onClose }) {
                                     <Camera size={24} className="text-muted group-hover:text-primary-light transition-colors" />
                                 </div>
                                 <span className="text-sm text-muted group-hover:text-white/70 transition-colors">
-                                    Tap to take a photo or upload
+                                    Snap a cover to auto-fill title & author
                                 </span>
                             </button>
                         )}
@@ -134,6 +240,7 @@ export default function AddBookModal({ onAdd, onClose }) {
                     <div>
                         <label className="block text-sm font-medium text-muted mb-2">
                             Book Title
+                            {scanning && <span className="text-xs text-primary-light ml-2 animate-pulse">scanning…</span>}
                         </label>
                         <input
                             type="text"
@@ -148,6 +255,7 @@ export default function AddBookModal({ onAdd, onClose }) {
                     <div>
                         <label className="block text-sm font-medium text-muted mb-2">
                             Author
+                            {scanning && <span className="text-xs text-primary-light ml-2 animate-pulse">scanning…</span>}
                         </label>
                         <input
                             type="text"
@@ -194,7 +302,7 @@ export default function AddBookModal({ onAdd, onClose }) {
 
                     <button
                         type="submit"
-                        disabled={!form.title.trim() || !form.totalPages}
+                        disabled={!form.title.trim() || !form.totalPages || scanning}
                         className="w-full flex items-center justify-center gap-2 px-6 py-3.5 bg-primary hover:bg-primary-light disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all cursor-pointer"
                     >
                         <Plus size={18} />
