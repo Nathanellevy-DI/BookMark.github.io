@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { Plus, BookOpen, X, Camera, Loader2 } from 'lucide-react';
+import { Plus, BookOpen, X, Camera, Loader2, Search } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 
 function compressImage(file, maxWidth = 600, quality = 0.7) {
@@ -25,64 +25,87 @@ function compressImage(file, maxWidth = 600, quality = 0.7) {
 }
 
 /**
- * Attempt to parse title and author from OCR text.
- * Heuristic: the largest / most prominent text on a book cover is usually the title,
- * and a smaller line is the author. We take the first 1-2 substantial lines as title
- * and the next one as author.
+ * Preprocess image for better OCR: grayscale + high contrast
  */
-function parseBookInfo(text) {
-    // Split into lines, trim, and filter out very short/empty lines
+function preprocessForOCR(file) {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                // Use higher resolution for OCR
+                const scale = Math.min(1600 / img.width, 1600 / img.height, 1);
+                canvas.width = img.width * scale;
+                canvas.height = img.height * scale;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+                // Convert to grayscale and boost contrast
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const data = imageData.data;
+                for (let i = 0; i < data.length; i += 4) {
+                    // Grayscale
+                    const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+                    // Contrast boost
+                    const boosted = Math.min(255, Math.max(0, (gray - 128) * 1.5 + 128));
+                    data[i] = data[i + 1] = data[i + 2] = boosted;
+                }
+                ctx.putImageData(imageData, 0, 0);
+                resolve(canvas);
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
+/**
+ * Extract useful keywords from OCR text, filtering noise.
+ */
+function extractKeywords(text) {
     const lines = text
         .split('\n')
         .map((l) => l.trim())
-        .filter((l) => l.length > 1);
+        .filter((l) => l.length > 2);
 
-    if (lines.length === 0) return { title: '', author: '' };
-
-    // Filter out common noise words/phrases from covers
-    const noise = /^(new york times|bestseller|best seller|#1|national|international|a novel|a memoir|a story|introduction by|foreword by|winner|award|edition|revised|updated|million copies)/i;
+    // Filter common cover noise
+    const noise = /^(new york times|bestseller|best seller|#1|national|international|a novel|a memoir|introduction|foreword|winner|award|edition|revised|updated|million copies|isbn|copyright|\d{10,})/i;
     const cleaned = lines.filter((l) => !noise.test(l));
 
-    if (cleaned.length === 0) return { title: lines[0], author: '' };
+    // Take the most substantial lines (likely title + author)
+    const sorted = cleaned
+        .filter((l) => /[a-zA-Z]{2,}/.test(l))
+        .slice(0, 5);
 
-    // Simple heuristic: first substantial line = title, look for author
-    let title = '';
-    let author = '';
+    return sorted.join(' ').replace(/[^a-zA-Z0-9\s'-]/g, '').trim();
+}
 
-    // Try to find an "author" line — typically has "by" prefix, or is ALL CAPS name, or just a name
-    const byPattern = /^by\s+(.+)/i;
+/**
+ * Search Google Books API for a query string.
+ * Returns { title, author } or nulls.
+ */
+async function searchGoogleBooks(query) {
+    if (!query || query.length < 3) return null;
 
-    for (let i = 0; i < cleaned.length; i++) {
-        const byMatch = cleaned[i].match(byPattern);
-        if (byMatch) {
-            author = byMatch[1];
-            // Everything before this "by" line is the title
-            title = cleaned.slice(0, i).join(' ') || title;
-            break;
-        }
+    try {
+        const encoded = encodeURIComponent(query);
+        const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encoded}&maxResults=3`);
+        if (!res.ok) return null;
+
+        const data = await res.json();
+        if (!data.items || data.items.length === 0) return null;
+
+        // Return the first result's info
+        const info = data.items[0].volumeInfo;
+        return {
+            title: info.title || '',
+            author: info.authors ? info.authors.join(', ') : '',
+            pages: info.pageCount || null,
+        };
+    } catch {
+        return null;
     }
-
-    if (!title) {
-        // No "by" found — first line(s) = title, last substantial line = author
-        if (cleaned.length === 1) {
-            title = cleaned[0];
-        } else {
-            // Title is usually larger text (first lines), author usually at bottom
-            title = cleaned[0];
-            // Grab the last line as author candidate (often the author name)
-            const lastLine = cleaned[cleaned.length - 1];
-            // Check if it looks like a person's name (2-4 words, mostly alpha)
-            const words = lastLine.split(/\s+/);
-            if (words.length >= 2 && words.length <= 5 && words.every((w) => /^[A-Za-z.''-]+$/.test(w))) {
-                author = lastLine;
-            }
-        }
-    }
-
-    return {
-        title: title.substring(0, 100), // cap length
-        author: author.substring(0, 60),
-    };
 }
 
 export default function AddBookModal({ onAdd, onClose }) {
@@ -107,34 +130,58 @@ export default function AddBookModal({ onAdd, onClose }) {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        // Compress and set the image immediately
+        // Compress and show image immediately
         const compressed = await compressImage(file);
         setCoverImage(compressed);
 
-        // Run OCR in background (only if title is still empty)
+        // Only scan if title is empty
         if (!form.title.trim()) {
             setScanning(true);
-            setScanStatus('Reading cover text…');
+            setScanStatus('Reading cover…');
             try {
-                const result = await Tesseract.recognize(file, 'eng', {
+                // Preprocess for better OCR
+                const processedCanvas = await preprocessForOCR(file);
+
+                setScanStatus('Scanning text…');
+                const result = await Tesseract.recognize(processedCanvas, 'eng', {
                     logger: (m) => {
                         if (m.status === 'recognizing text') {
                             const pct = Math.round((m.progress || 0) * 100);
-                            setScanStatus(`Reading… ${pct}%`);
+                            setScanStatus(`Scanning… ${pct}%`);
                         }
                     },
                 });
 
-                const { title, author } = parseBookInfo(result.data.text);
+                const keywords = extractKeywords(result.data.text);
 
-                // Only fill empty fields so we don't overwrite user edits
-                setForm((prev) => ({
-                    ...prev,
-                    title: prev.title || title,
-                    author: prev.author || author,
-                }));
+                if (keywords) {
+                    setScanStatus('Looking up book…');
+                    const bookInfo = await searchGoogleBooks(keywords);
+
+                    if (bookInfo) {
+                        setForm((prev) => ({
+                            ...prev,
+                            title: prev.title || bookInfo.title,
+                            author: prev.author || bookInfo.author,
+                            totalPages: prev.totalPages || (bookInfo.pages ? String(bookInfo.pages) : ''),
+                        }));
+                    } else {
+                        // Fallback: use raw OCR lines
+                        const lines = result.data.text
+                            .split('\n')
+                            .map((l) => l.trim())
+                            .filter((l) => l.length > 2 && /[a-zA-Z]{2,}/.test(l));
+                        if (lines.length > 0) {
+                            setForm((prev) => ({
+                                ...prev,
+                                title: prev.title || lines[0],
+                                author: prev.author || (lines.length > 1 ? lines[1] : ''),
+                            }));
+                        }
+                    }
+                }
             } catch (err) {
-                console.warn('OCR failed:', err);
+                console.warn('OCR/lookup failed:', err);
             } finally {
                 setScanning(false);
                 setScanStatus('');
@@ -269,6 +316,7 @@ export default function AddBookModal({ onAdd, onClose }) {
                     <div>
                         <label className="block text-sm font-medium text-muted mb-2">
                             Total Pages
+                            {scanning && <span className="text-xs text-primary-light ml-2 animate-pulse">scanning…</span>}
                         </label>
                         <input
                             type="number"
