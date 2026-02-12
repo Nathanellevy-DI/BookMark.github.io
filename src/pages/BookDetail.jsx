@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
     ArrowLeft,
@@ -11,11 +11,35 @@ import {
     CheckCircle2,
     Flag,
     TrendingUp,
+    Camera,
 } from 'lucide-react';
 import FinishBookModal from '../components/FinishBookModal';
 
+function compressImage(file, maxWidth = 600, quality = 0.7) {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const ratio = Math.min(maxWidth / img.width, maxWidth / img.height);
+                const width = ratio < 1 ? img.width * ratio : img.width;
+                const height = ratio < 1 ? img.height * ratio : img.height;
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+                resolve(canvas.toDataURL('image/jpeg', quality));
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
 export default function BookDetail({
     getBook,
+    updateBook,
     addEntry,
     deleteEntry,
     finishBook,
@@ -27,6 +51,7 @@ export default function BookDetail({
     const { id } = useParams();
     const navigate = useNavigate();
     const book = getBook(id);
+    const coverInputRef = useRef(null);
 
     const [pageNum, setPageNum] = useState('');
     const [note, setNote] = useState('');
@@ -124,6 +149,49 @@ export default function BookDetail({
 
             <div className="app-content">
                 <main className="max-w-3xl mx-auto px-4 pt-6 pb-12">
+                    {/* Cover Photo Section */}
+                    <div className="bg-surface-raised border border-white/5 rounded-2xl overflow-hidden mb-6">
+                        <input
+                            ref={coverInputRef}
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                const compressed = await compressImage(file);
+                                updateBook(book.id, { coverImage: compressed });
+                            }}
+                            className="hidden"
+                        />
+                        {book.coverImage ? (
+                            <div
+                                className="relative group cursor-pointer"
+                                onClick={() => coverInputRef.current?.click()}
+                            >
+                                <img
+                                    src={book.coverImage}
+                                    alt={book.title}
+                                    className="w-full h-48 object-cover"
+                                />
+                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                    <div className="flex items-center gap-2 px-3 py-2 bg-white/20 backdrop-blur-sm rounded-lg text-sm font-medium">
+                                        <Camera size={16} />
+                                        Change Photo
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <button
+                                onClick={() => coverInputRef.current?.click()}
+                                className="w-full h-28 flex items-center justify-center gap-2 text-muted hover:text-white/70 hover:bg-white/5 transition-all cursor-pointer"
+                            >
+                                <Camera size={18} />
+                                <span className="text-sm">Add Cover Photo</span>
+                            </button>
+                        )}
+                    </div>
+
                     {/* Progress Section */}
                     <div className="bg-surface-raised border border-white/5 rounded-2xl p-5 mb-6">
                         <div className="flex items-start gap-4">

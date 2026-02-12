@@ -30,6 +30,7 @@ export function useLocalStorage() {
             author: book.author,
             totalPages: Number(book.totalPages),
             coverColor: book.coverColor || generateCoverColor(),
+            coverImage: book.coverImage || null,
             dateStarted: new Date().toISOString(),
             dateFinished: null,
             rating: null,

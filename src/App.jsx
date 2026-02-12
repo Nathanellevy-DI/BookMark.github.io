@@ -38,6 +38,7 @@ export default function App() {
           element={
             <BookDetail
               getBook={getBook}
+              updateBook={updateBook}
               addEntry={addEntry}
               deleteEntry={deleteEntry}
               finishBook={finishBook}

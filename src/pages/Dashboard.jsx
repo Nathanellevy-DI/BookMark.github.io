@@ -92,7 +92,7 @@ export default function Dashboard({
     // Build gallery items for finished books
     const galleryItems = useMemo(() => {
         return finishedBooks.map((book) => ({
-            image: generateBookCover(book.title, book.author, book.coverColor),
+            image: book.coverImage || generateBookCover(book.title, book.author, book.coverColor),
             text: book.title,
         }));
     }, [finishedBooks]);
@@ -156,14 +156,13 @@ export default function Dashboard({
                             <h2 className="text-sm font-semibold text-muted uppercase tracking-wider mb-4">
                                 Currently Reading
                             </h2>
-                            <div className="space-y-3">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                                 {activeBooks.map((book) => (
                                     <BookCard
                                         key={book.id}
                                         book={book}
                                         progress={getProgress(book)}
                                         currentPage={getCurrentPage(book)}
-                                        readingDays={getReadingDays(book)}
                                         onClick={() => navigate(`/book/${book.id}`)}
                                     />
                                 ))}
@@ -225,18 +224,17 @@ export default function Dashboard({
                         </section>
                     )}
 
-                    {/* Finished Books — Card List (fewer than 3) */}
+                    {/* Finished Books — Card Grid (fewer than 3) */}
                     {!showGallery && finishedBooks.length > 0 && (
                         <section className="mb-8">
                             <h2 className="text-sm font-semibold text-muted uppercase tracking-wider mb-4">
                                 Finished
                             </h2>
-                            <div className="space-y-3">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                                 {finishedBooks.map((book) => (
                                     <FinishedBookCard
                                         key={book.id}
                                         book={book}
-                                        readingDays={getReadingDays(book)}
                                         onClick={() => navigate(`/book/${book.id}`)}
                                     />
                                 ))}
@@ -295,94 +293,128 @@ function StatCard({ icon, label, value, color }) {
     );
 }
 
-function BookCard({ book, progress, currentPage, readingDays, onClick }) {
+function BookCard({ book, progress, currentPage, onClick }) {
     return (
         <button
             onClick={onClick}
-            className="w-full text-left bg-surface-raised border border-white/5 rounded-2xl p-4 hover:border-primary/30 transition-all cursor-pointer group"
+            className="group relative aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-primary/40 transition-all cursor-pointer hover:scale-[1.03] hover:shadow-xl hover:shadow-primary/10"
         >
-            <div className="flex gap-4">
-                {/* Book Cover Spine */}
-                <div
-                    className="w-2 h-full min-h-[80px] rounded-full shrink-0"
-                    style={{ backgroundColor: book.coverColor }}
+            {/* Cover Image or Generated Cover */}
+            {book.coverImage ? (
+                <img
+                    src={book.coverImage}
+                    alt={book.title}
+                    className="absolute inset-0 w-full h-full object-cover"
                 />
-                <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-white group-hover:text-primary-light transition-colors truncate">
-                        {book.title}
-                    </h3>
-                    {book.author && (
-                        <p className="text-sm text-muted mt-0.5">{book.author}</p>
-                    )}
+            ) : (
+                <div
+                    className="absolute inset-0"
+                    style={{
+                        background: `linear-gradient(145deg, ${book.coverColor}, #0d0d1a)`,
+                    }}
+                >
+                    {/* Decorative circles */}
+                    <div
+                        className="absolute -top-8 -right-8 w-28 h-28 rounded-full"
+                        style={{ backgroundColor: book.coverColor, opacity: 0.15 }}
+                    />
+                    <div className="absolute bottom-12 -left-6 w-20 h-20 rounded-full bg-white/5" />
 
-                    {/* Progress Bar */}
-                    <div className="mt-3 mb-2">
-                        <div className="flex justify-between text-xs text-muted mb-1.5">
-                            <span>
-                                Page {currentPage} of {book.totalPages}
-                            </span>
-                            <span className="font-medium text-white">{progress}%</span>
-                        </div>
-                        <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-                            <div
-                                className="h-full rounded-full transition-all duration-500"
-                                style={{
-                                    width: `${progress}%`,
-                                    background: `linear-gradient(90deg, ${book.coverColor}, oklch(0.7 0.18 260))`,
-                                }}
-                            />
-                        </div>
-                    </div>
+                    {/* Spine accent */}
+                    <div
+                        className="absolute left-3 top-6 bottom-6 w-1 rounded-full"
+                        style={{ backgroundColor: book.coverColor, opacity: 0.5 }}
+                    />
 
-                    <div className="flex items-center gap-3 text-xs text-muted">
-                        <span className="flex items-center gap-1">
-                            <Clock size={12} />
-                            {readingDays} day{readingDays !== 1 ? 's' : ''}
-                        </span>
-                        <span>{book.entries.length} entries</span>
+                    {/* Title & Author */}
+                    <div className="absolute inset-0 flex flex-col justify-center px-5">
+                        <h3 className="text-sm font-bold text-white leading-snug line-clamp-3">
+                            {book.title}
+                        </h3>
+                        {book.author && (
+                            <p className="text-xs text-white/50 mt-1.5 truncate">{book.author}</p>
+                        )}
                     </div>
+                </div>
+            )}
+
+            {/* Dark gradient overlay at bottom for progress */}
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3 pt-8">
+                <div className="flex justify-between text-[10px] text-white/70 mb-1">
+                    <span>p.{currentPage}/{book.totalPages}</span>
+                    <span className="font-semibold text-white">{progress}%</span>
+                </div>
+                <div className="h-1 bg-white/15 rounded-full overflow-hidden">
+                    <div
+                        className="h-full rounded-full"
+                        style={{
+                            width: `${progress}%`,
+                            background: `linear-gradient(90deg, ${book.coverColor}, oklch(0.7 0.18 260))`,
+                        }}
+                    />
                 </div>
             </div>
         </button>
     );
 }
 
-function FinishedBookCard({ book, readingDays, onClick }) {
+function FinishedBookCard({ book, onClick }) {
     return (
         <button
             onClick={onClick}
-            className="w-full text-left bg-surface-raised border border-white/5 rounded-2xl p-4 hover:border-accent/30 transition-all cursor-pointer group opacity-80 hover:opacity-100"
+            className="group relative aspect-[2/3] rounded-2xl overflow-hidden border border-white/10 hover:border-accent/40 transition-all cursor-pointer hover:scale-[1.03] hover:shadow-xl hover:shadow-accent/10"
         >
-            <div className="flex gap-4">
-                <div
-                    className="w-2 h-full min-h-[60px] rounded-full shrink-0"
-                    style={{ backgroundColor: book.coverColor }}
+            {/* Cover Image or Generated Cover */}
+            {book.coverImage ? (
+                <img
+                    src={book.coverImage}
+                    alt={book.title}
+                    className="absolute inset-0 w-full h-full object-cover"
                 />
-                <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                        <h3 className="font-semibold text-white truncate">{book.title}</h3>
-                        <CheckCircle2 size={16} className="text-accent shrink-0" />
+            ) : (
+                <div
+                    className="absolute inset-0"
+                    style={{
+                        background: `linear-gradient(145deg, ${book.coverColor}, #0d0d1a)`,
+                    }}
+                >
+                    <div
+                        className="absolute -top-8 -right-8 w-28 h-28 rounded-full"
+                        style={{ backgroundColor: book.coverColor, opacity: 0.15 }}
+                    />
+                    <div className="absolute bottom-12 -left-6 w-20 h-20 rounded-full bg-white/5" />
+                    <div
+                        className="absolute left-3 top-6 bottom-6 w-1 rounded-full"
+                        style={{ backgroundColor: book.coverColor, opacity: 0.5 }}
+                    />
+                    <div className="absolute inset-0 flex flex-col justify-center px-5">
+                        <h3 className="text-sm font-bold text-white leading-snug line-clamp-3">
+                            {book.title}
+                        </h3>
+                        {book.author && (
+                            <p className="text-xs text-white/50 mt-1.5 truncate">{book.author}</p>
+                        )}
                     </div>
-                    {book.author && (
-                        <p className="text-sm text-muted mt-0.5">{book.author}</p>
-                    )}
-                    <div className="flex items-center gap-3 mt-2 text-xs text-muted">
-                        <span className="flex items-center gap-1">
-                            {[1, 2, 3, 4, 5].map((s) => (
-                                <Star
-                                    key={s}
-                                    size={12}
-                                    className={
-                                        s <= (book.rating || 0)
-                                            ? 'text-star fill-star'
-                                            : 'text-muted/30'
-                                    }
-                                />
-                            ))}
-                        </span>
-                        <span>{readingDays} days</span>
-                        <span>{book.entries.length} entries</span>
-                    </div>
+                </div>
+            )}
+
+            {/* Bottom overlay with rating */}
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3 pt-8">
+                <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-0.5">
+                        {[1, 2, 3, 4, 5].map((s) => (
+                            <Star
+                                key={s}
+                                size={10}
+                                className={
+                                    s <= (book.rating || 0)
+                                        ? 'text-star fill-star'
+                                        : 'text-white/20'
+                                }
+                            />
+                        ))}
+                    </span>
+                    <CheckCircle2 size={14} className="text-accent" />
                 </div>
             </div>
         </button>
